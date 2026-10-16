@@ -1,0 +1,78 @@
+# Google Cloud Build pipeline
+# This runs automatically when you push to main branch on GitHub
+# (after you connect GitHub in Cloud Build settings)
+#
+# Pipeline: push to GitHub → Cloud Build → build Docker images →
+#           push to Artifact Registry → deploy to Cloud Run
+
+steps:
+  # Step 1: Build the backend Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - -t
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/shuttle/backend:$COMMIT_SHA'
+      - ./backend
+    id: 'build-backend'
+
+  # Step 2: Build the frontend Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - -t
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/shuttle/frontend:$COMMIT_SHA'
+      - --build-arg
+      - 'VITE_API_URL=https://shuttle-backend-$_SUFFIX.run.app'
+      - ./frontend
+    id: 'build-frontend'
+
+  # Step 3: Push backend to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - push
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/shuttle/backend:$COMMIT_SHA'
+    waitFor: ['build-backend']
+
+  # Step 4: Push frontend to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - push
+      - '$_REGION-docker.pkg.dev/$PROJECT_ID/shuttle/frontend:$COMMIT_SHA'
+    waitFor: ['build-frontend']
+
+  # Step 5: Deploy backend to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - shuttle-backend
+      - --image=$_REGION-docker.pkg.dev/$PROJECT_ID/shuttle/backend:$COMMIT_SHA
+      - --region=$_REGION
+      - --platform=managed
+      - --allow-unauthenticated
+      - --set-env-vars=NODE_ENV=production,MONGODB_URI=$$MONGODB_URI,JWT_SECRET=$$JWT_SECRET,REDIS_URL=$$REDIS_URL
+      - --secrets=MONGODB_URI=shuttle-mongo-uri:latest,JWT_SECRET=shuttle-jwt-secret:latest
+    waitFor: ['build-backend']
+    id: 'deploy-backend'
+
+  # Step 6: Deploy frontend to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - shuttle-frontend
+      - --image=$_REGION-docker.pkg.dev/$PROJECT_ID/shuttle/frontend:$COMMIT_SHA
+      - --region=$_REGION
+      - --platform=managed
+      - --allow-unauthenticated
+    waitFor: ['deploy-backend']
+
+substitutions:
+  _REGION: us-central1
+  _SUFFIX: xyz123  # replace with your Cloud Run URL suffix
+
+images:
+  - '$_REGION-docker.pkg.dev/$PROJECT_ID/shuttle/backend:$COMMIT_SHA'
+  - '$_REGION-docker.pkg.dev/$PROJECT_ID/shuttle/frontend:$COMMIT_SHA'

@@ -1,0 +1,14 @@
+const morgan = require('morgan');
+const logger = require('../utils/logger');
+
+// Morgan writes to Winston so all logs go through the same pipeline
+const stream = {
+  write: (message) => logger.http(message.trim()),
+};
+
+const requestLogger = morgan(
+  ':method :url :status :res[content-length] - :response-time ms',
+  { stream }
+);
+
+module.exports = requestLogger;

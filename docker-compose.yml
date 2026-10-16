@@ -1,0 +1,89 @@
+version: '3.8'
+
+# What is Docker Compose?
+# Instead of running 4 separate `docker run` commands, docker-compose.yml
+# describes all your services in one file. One command (`docker compose up`)
+# starts everything. Each service runs in its own container but they can
+# talk to each other using their service names as hostnames.
+
+services:
+  # MongoDB database
+  mongo:
+    image: mongo:7
+    container_name: shuttle-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password  # change in production!
+      MONGO_INITDB_DATABASE: shuttle
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db  # data persists across container restarts
+    networks:
+      - shuttle-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      retries: 5
+
+  # Redis cache
+  redis:
+    image: redis:7-alpine
+    container_name: shuttle-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - shuttle-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+
+  # Node.js backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shuttle-backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    environment:
+      # Override env file values for Docker networking:
+      # "mongo" is the hostname of the mongo service above
+      MONGODB_URI: mongodb://admin:password@mongo:27017/shuttle?authSource=admin
+      REDIS_URL: redis://redis:6379
+      NODE_ENV: production
+    ports:
+      - "5000:5000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - shuttle-net
+
+  # React frontend (nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:5000  # backend URL visible from browser
+    container_name: shuttle-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - shuttle-net
+
+networks:
+  shuttle-net:
+    driver: bridge
+
+volumes:
+  mongo_data:
